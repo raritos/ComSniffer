@@ -1,0 +1,76 @@
+; ComSniffer.inf
+; Installs ComSniffer.sys as an UPPER filter on USB serial (COM) ports.
+; It attaches to every device in Class=Ports (GUID below), which covers
+; both USB-to-serial adapters and hardware UARTs.
+;
+; To target ONLY a specific COM port:
+;   Change the [Manufacturer] / [Models] section to match your device's
+;   hardware ID (shown in Device Manager > Details > Hardware IDs).
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = Ports
+ClassGuid   = {4D36E978-E325-11CE-BFC1-08002BE10318}
+Provider    = %ManufacturerName%
+DriverVer   = 06/22/2024,1.0.0.0
+CatalogFile = ComSniffer.cat
+
+[DestinationDirs]
+DefaultDestDir = 12   ; \Windows\System32\drivers
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+ComSniffer.sys = 1,,
+
+; ----------------------------------------------------------------
+; Manufacturer / Models
+; ----------------------------------------------------------------
+[Manufacturer]
+%ManufacturerName% = Standard,NTamd64
+
+; NTamd64 — matches all Ports-class devices on x64 Windows.
+; Replace the hardware ID if you want per-device targeting:
+;   USB\VID_067B&PID_2303   (Prolific PL2303)
+;   USB\VID_0403&PID_6001   (FTDI FT232R)
+;   USB\VID_10C4&PID_EA60   (Silicon Labs CP210x)
+[Standard.NTamd64]
+%DeviceDesc% = ComSniffer_Install, USB\Class_02&SubClass_02  ; CDC ACM (most LPG kits)
+
+; ----------------------------------------------------------------
+; Installation
+; ----------------------------------------------------------------
+[ComSniffer_Install.NT]
+CopyFiles = ComSniffer_CopyFiles
+
+[ComSniffer_Install.NT.HW]
+AddReg = ComSniffer_AddReg_HW
+
+; This is the KEY line: registers our driver as an UpperFilter
+[ComSniffer_AddReg_HW]
+HKR,,"UpperFilters",0x00010008,"ComSniffer"
+; 0x00010008 = REG_MULTI_SZ | APPENDIFNOTEXISTS
+
+[ComSniffer_Install.NT.Services]
+AddService = ComSniffer,, ComSniffer_Service
+
+[ComSniffer_Service]
+DisplayName    = %ServiceDesc%
+ServiceType    = 1     ; SERVICE_KERNEL_DRIVER
+StartType      = 3     ; SERVICE_DEMAND_START
+ErrorControl   = 1     ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %12%\ComSniffer.sys
+LoadOrderGroup = PnP Filter
+
+[ComSniffer_CopyFiles]
+ComSniffer.sys,,,2
+
+; ----------------------------------------------------------------
+; Strings
+; ----------------------------------------------------------------
+[Strings]
+ManufacturerName = "ComSniffer"
+DiskName         = "ComSniffer Driver Disk"
+DeviceDesc       = "COM Port Protocol Sniffer Filter"
+ServiceDesc      = "ComSniffer Serial Filter Driver"
