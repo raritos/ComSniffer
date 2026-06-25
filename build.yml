@@ -1,0 +1,90 @@
+name: Build ComSniffer.sys
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:   # allows manual "Run workflow" button on GitHub
+
+jobs:
+  build:
+    runs-on: windows-2022   # free runner, has VS 2022; WDK installed via workload below
+
+    steps:
+      # ── 1. Grab the code ─────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── 2. Install WDK workload into Visual Studio 2022 ──────────
+      - name: Install WDK
+        shell: powershell
+        run: |
+          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
+            -latest -property installationPath
+          Write-Host "Installing WDK workload into: $vsPath"
+          $p = Start-Process -FilePath "$vsPath\Installer\vs_installer.exe" `
+            -ArgumentList "modify", "--installPath", "`"$vsPath`"",
+                         "--add", "Microsoft.VisualStudio.Component.WindowsDriverKit",
+                         "--quiet", "--norestart", "--wait" `
+            -Wait -PassThru -NoNewWindow
+          if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) {
+            throw "vs_installer failed with exit code $($p.ExitCode)"
+          }
+          Write-Host "WDK workload installed (exit: $($p.ExitCode))."
+
+      # ── 3. Build with MSBuild ────────────────────────────────────
+      - name: Build driver (x64 Release)
+        shell: powershell
+        run: |
+          # Find MSBuild that ships with VS 2022
+          $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
+            -latest -requires Microsoft.Component.MSBuild `
+            -find MSBuild\**\Bin\MSBuild.exe | Select-Object -First 1
+
+          Write-Host "Using MSBuild: $msbuild"
+
+          & $msbuild driver\ComSniffer.vcxproj `
+            /p:Configuration=Release `
+            /p:Platform=x64 `
+            /p:WindowsTargetPlatformVersion=10.0 `
+            /t:Build `
+            /verbosity:minimal
+
+      # ── 4. Self-sign for test use ────────────────────────────────
+      - name: Self-sign driver (test certificate)
+        shell: powershell
+        run: |
+          # Create a throwaway code-signing cert
+          $cert = New-SelfSignedCertificate `
+            -Subject "CN=ComSnifferTestCert" `
+            -Type CodeSigningCert `
+            -CertStoreLocation "Cert:\CurrentUser\My" `
+            -KeyUsage DigitalSignature
+
+          $sys = "driver\x64\Release\ComSniffer.sys"
+          $inf = "driver\ComSniffer.inf"
+
+          # Sign the .sys
+          Set-AuthenticodeSignature -FilePath $sys `
+            -Certificate $cert `
+            -TimestampServer "http://timestamp.digicert.com" | Out-Null
+
+          Write-Host "Signed: $sys"
+
+          # Also stamp the INF version with today's date
+          $today = (Get-Date).ToString("MM/dd/yyyy")
+          (Get-Content $inf) -replace "DriverVer\s*=.*", "DriverVer = $today,1.0.0.0" |
+            Set-Content $inf
+
+      # ── 5. Upload the built artifacts ────────────────────────────
+      - name: Upload driver artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ComSniffer-driver-x64
+          path: |
+            driver/x64/Release/ComSniffer.sys
+            driver/ComSniffer.inf
+            scripts/install.ps1
+            scripts/uninstall.ps1
+            viewer/comsniffer_viewer.py
+          retention-days: 30   # download link stays alive 30 days
